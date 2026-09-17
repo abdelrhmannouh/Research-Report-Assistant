@@ -1,7 +1,8 @@
 # Research Report Assistant
 
 A small multi-step LLM pipeline that takes a topic, researches it on the web, and
-turns the findings into a polished written report.
+turns the findings into a polished written report — available both as a CLI and
+as a Streamlit web app.
 
 Given a query, it runs three stages:
 
@@ -16,6 +17,8 @@ Given a query, it runs three stages:
 
 ```
 main.py                  CLI entry point — prompts for a topic and prints the report
+app.py                    Streamlit web app (form, live status, downloadable report)
+.streamlit/config.toml    Theme used by the Streamlit app
 src/
   agents/agents.py        Research agent definition (LLM + web_search tool)
   pipeline/pipeline.py    Orchestrates research -> analyze -> write
@@ -27,6 +30,8 @@ src/
 1. Create a virtual environment and install dependencies:
 
    ```bash
+   python -m venv langAgent
+   langAgent\Scripts\activate     # on Windows
    pip install -r requirements.txt
    ```
 
@@ -39,16 +44,37 @@ src/
 
 ## Usage
 
-Run the CLI and enter a topic when prompted:
+### CLI
 
 ```bash
 python main.py
 ```
 
-The final report is printed to the console.
+Enter a topic when prompted; the final report is printed to the console.
+
+### Web app
+
+```bash
+streamlit run app.py
+```
+
+Opens a browser UI where you can enter a topic, watch the research/analyze/write
+steps run, read the generated report, and download it as Markdown.
+
+> **Note on deployment:** this app is a Streamlit app, not a static site or
+> serverless function, so it needs a host that keeps a persistent server process
+> running (e.g. [Streamlit Community Cloud](https://streamlit.io/cloud), Render,
+> Railway, or Hugging Face Spaces). Vercel's serverless model isn't a good fit for
+> Streamlit's long-lived WebSocket connection.
 
 ## Notes
 
 - The research agent retries automatically (up to 3 attempts) on transient
   `tool_use_failed` errors from Groq.
 - `web_search` returns the top 3 Tavily results (title, snippet, URL) for each query.
+
+## License
+
+Licensed under the Apache License 2.0 — see [LICENSE](LICENSE).
+
+© Abdelrhman Nouh. All rights reserved.
