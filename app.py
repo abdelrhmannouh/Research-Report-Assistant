@@ -2,7 +2,11 @@ import datetime
 
 import streamlit as st
 
-from src.pipeline.pipeline import pipeline
+from src.client import ReportClient, ReportError
+from src.config import get_settings
+from src.models import ReportResult
+
+client = ReportClient(get_settings().api_url)
 
 st.set_page_config(
     page_title="Research Report Assistant",
@@ -11,7 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Only style the elements we own (hero banner, report card, footer, chips).
+# Only style the elements we own (hero banner, footer, form).
 # Core widgets are left to the theme in .streamlit/config.toml so they stay
 # legible and consistent across Streamlit versions.
 st.markdown(
@@ -33,16 +37,6 @@ st.markdown(
             color: rgba(255, 255, 255, 0.92);
             font-size: 1rem;
             margin: 0;
-        }
-        .report-card {
-            padding: 1.5rem 1.75rem;
-            border-radius: 14px;
-            background: rgba(255, 255, 255, 0.04);
-            border: 1px solid rgba(255, 255, 255, 0.10);
-            margin-top: 1.25rem;
-        }
-        .report-card h4 {
-            margin-top: 0;
         }
         .footer {
             text-align: center;
@@ -72,9 +66,10 @@ with st.sidebar:
     st.markdown(
         "1. **Research** — searches the web via Tavily\n"
         "2. **Analyze** — extracts and organizes key facts\n"
-        "3. **Write** — produces a polished report"
+        "3. **Write** — produces a polished report with cited sources"
     )
     st.markdown("---")
+    st.caption(f"Backend: {client.mode}")
     st.caption(f"© {datetime.date.today().year} Abdelrhman Nouh. All rights reserved.")
 
 st.markdown(
@@ -87,53 +82,72 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-if "report" not in st.session_state:
-    st.session_state.report = None
-if "topic" not in st.session_state:
-    st.session_state.topic = None
-if "error" not in st.session_state:
-    st.session_state.error = None
+STAGES = {
+    "research": ("🔎", "Researching the topic on the web", "Research"),
+    "analyze": ("🧩", "Analyzing and structuring the findings", "Analysis"),
+    "write": ("✍️", "Writing the final report", "Writing"),
+}
+
+st.session_state.setdefault("result", None)
+st.session_state.setdefault("error", None)
 
 with st.form("research_form"):
     topic = st.text_input(
         "What would you like a report on?",
         placeholder="e.g. The impact of AI on renewable energy",
-        label_visibility="visible",
+        max_chars=300,
     )
     submitted = st.form_submit_button("Generate Report", use_container_width=True)
 
 if submitted:
     st.session_state.error = None
-    if not topic or not topic.strip():
-        st.session_state.report = None
-        st.warning("Please enter a topic first.")
+    topic = (topic or "").strip()
+    if len(topic) < 3:
+        st.warning("Please enter a topic (at least 3 characters).")
     else:
+        st.session_state.result = None
         with st.status("Working on your report...", expanded=True) as status:
+            lines = {stage: st.empty() for stage in STAGES}
             try:
-                st.write("🔎 Researching the topic on the web...")
-                st.write("🧩 Analyzing and structuring the findings...")
-                st.write("✍️ Writing the final report...")
-                st.session_state.report = pipeline(topic.strip())
-                st.session_state.topic = topic.strip()
-                status.update(label="Report ready!", state="complete", expanded=False)
-            except Exception as e:
-                st.session_state.report = None
+                for item in client.stream(topic):
+                    if isinstance(item, ReportResult):
+                        st.session_state.result = item
+                        continue
+                    icon, doing, done = STAGES[item.stage]
+                    if item.status == "started":
+                        status.update(label=f"{doing}...")
+                        lines[item.stage].markdown(f"{icon} {doing}...")
+                    else:
+                        extra = f", {item.detail}" if item.detail else ""
+                        lines[item.stage].markdown(
+                            f"✅ {done} done in {item.elapsed:.1f}s{extra}"
+                        )
+                total = sum(st.session_state.result.timings.values())
+                status.update(
+                    label=f"Report ready in {total:.0f}s", state="complete", expanded=False
+                )
+            except ReportError as e:
                 st.session_state.error = str(e)
                 status.update(label="Something went wrong", state="error", expanded=True)
 
 if st.session_state.error:
-    st.error(f"Something went wrong while generating the report: {st.session_state.error}")
+    st.error(st.session_state.error)
 
-if st.session_state.report:
-    st.markdown('<div class="report-card">', unsafe_allow_html=True)
-    st.markdown(f"#### 📄 Report: {st.session_state.topic}")
-    st.markdown(st.session_state.report)
-    st.markdown("</div>", unsafe_allow_html=True)
+result = st.session_state.result
+if result:
+    with st.container(border=True):
+        st.markdown(f"#### 📄 Report: {result.topic}")
+        st.markdown(result.report)
+        if result.sources:
+            st.markdown("##### Sources")
+            st.markdown(
+                "\n".join(f"{s.id}. [{s.title}]({s.url})" for s in result.sources)
+            )
 
     st.download_button(
         label="⬇️ Download report as Markdown",
-        data=st.session_state.report,
-        file_name=f"{st.session_state.topic.lower().replace(' ', '_')}_report.md",
+        data=result.to_markdown(),
+        file_name=result.filename,
         mime="text/markdown",
         use_container_width=True,
     )
